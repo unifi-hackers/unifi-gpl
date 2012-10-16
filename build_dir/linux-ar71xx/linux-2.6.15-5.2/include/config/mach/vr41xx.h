@@ -1,0 +1,1 @@
+#undef CONFIG_MACH_VR41XX

@@ -1,0 +1,262 @@
+--- a/include/linux/pkt_sched.h
++++ b/include/linux/pkt_sched.h
+@@ -240,6 +240,7 @@ struct tc_htb_opt
+ 	__u32	quantum;
+ 	__u32	level;		/* out only */
+ 	__u32	prio;
++	__u32	group;
+ };
+ struct tc_htb_glob
+ {
+--- a/net/sched/sch_generic.c
++++ b/net/sched/sch_generic.c
+@@ -419,7 +419,7 @@ struct Qdisc *qdisc_alloc(struct net_dev
+ 	size = QDISC_ALIGN(sizeof(*sch));
+ 	size += ops->priv_size + (QDISC_ALIGNTO - 1);
+ 
+-	p = kmalloc(size, GFP_KERNEL);
++	p = kmalloc(size, GFP_ATOMIC);
+ 	if (!p)
+ 		goto errout;
+ 	memset(p, 0, size);
+--- a/net/sched/sch_htb.c
++++ b/net/sched/sch_htb.c
+@@ -176,9 +176,10 @@ struct htb_class {
+ #endif
+ 
+ 	/* topology */
+-	int level;		/* our level (see above) */
++	int level;			/* our level (see above) */
+ 	struct htb_class *parent;	/* parent class */
+-	struct list_head clist;	/* classid list item */
++	struct list_head clist;		/* classid list item */
++	struct list_head glist;		/* group list item */
+ 	struct list_head sibling;	/* sibling list item */
+ 	struct list_head children;	/* children list */
+ 
+@@ -220,6 +221,7 @@ struct htb_class {
+ 	long buffer, cbuffer;	/* token bucket depth/rate */
+ 	long mbuffer;		/* max wait time */
+ 	long tokens, ctokens;	/* current number of tokens */
++	long group;		/* group size */
+ 	psched_time_t t_c;	/* checkpoint time */
+ };
+ 
+@@ -240,6 +242,7 @@ typedef struct htb_class *htb_cls_array[
+ struct htb_sched {
+ 	struct list_head root;	/* root classes list */
+ 	struct list_head clist;	/* all classes list */
++	struct list_head glist;	/* all group list */
+ 	/* all classes arrays for fast lookup */
+ 	htb_cls_array *classes[HTB_CLS_ARRAYS];
+ 	struct list_head drops[TC_HTB_NUMPRIO];	/* active leaves (for drops) */
+@@ -286,6 +289,110 @@ struct htb_sched {
+ 	long direct_pkts;
+ };
+ 
++static struct htb_class *__htb_find(u32 classid, struct Qdisc *sch)
++{
++	struct htb_sched *q = qdisc_priv(sch);
++	struct htb_class *gcl = NULL, *cl = NULL;
++	struct list_head *p;
++	struct Qdisc *new_q;
++	htb_cls_array *a;
++	int minorid;
++
++	if (TC_H_MAJ(classid) != sch->handle)
++		return NULL;
++
++	minorid = TC_H_MIN(classid);
++	a = q->classes[HTB_CLS_ARRAY(minorid)];
++	if (unlikely(a == NULL)) {
++		if ((q->classes[HTB_CLS_ARRAY(minorid)] = kzalloc(sizeof(htb_cls_array), GFP_ATOMIC)) == NULL) {
++			printk(KERN_ERR "HTB: allocate array failed\n");
++			return NULL;
++		}
++		a = q->classes[HTB_CLS_ARRAY(minorid)];
++	}
++
++	cl = (*a)[HTB_CLS_INDEX(minorid)];
++	if (likely(cl != NULL)) {
++		return (cl->group ? NULL : cl);
++	}
++
++	list_for_each(p, &q->glist) {
++		struct htb_class *tcl = list_entry(p, struct htb_class, glist);
++		if (minorid < TC_H_MIN(tcl->classid))
++			continue;
++		if (minorid > (TC_H_MIN(tcl->classid) + tcl->group))
++			continue;
++		gcl = tcl;
++		break;
++	}
++	if (unlikely(!gcl)) {
++		return NULL;
++	}
++
++	if ((cl = kzalloc(sizeof(*cl), GFP_ATOMIC)) != NULL) {
++		memset(cl, 0, sizeof(*cl));
++		cl->refcnt = 1;
++		INIT_LIST_HEAD(&cl->sibling);
++		INIT_LIST_HEAD(&cl->clist);
++		INIT_LIST_HEAD(&cl->glist);
++		INIT_LIST_HEAD(&cl->children);
++		INIT_LIST_HEAD(&cl->un.leaf.drop_list);
++#ifdef HTB_DEBUG
++		cl->magic = HTB_CMAGIC;
++#endif
++		new_q = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops);
++		if (!new_q) {
++			printk(KERN_ERR "HTB: allocate default qdisc failed\n");
++			kfree(cl);
++			cl = NULL;
++			goto out;
++		}
++		sch_tree_lock(sch);
++		cl->un.leaf.q = new_q ? new_q : &noop_qdisc;
++		cl->classid = classid;
++		cl->parent = gcl->parent;
++		cl->tokens = gcl->buffer;
++		cl->ctokens = gcl->cbuffer;
++		cl->mbuffer = gcl->mbuffer;
++		cl->un.leaf.quantum = gcl->un.leaf.quantum;
++		cl->un.leaf.prio = gcl->un.leaf.prio;
++		cl->buffer = gcl->buffer;
++		cl->cbuffer = gcl->cbuffer;
++		cl->rate = qdisc_get_rtab(&(gcl->rate->rate), NULL);
++		cl->ceil = qdisc_get_rtab(&(gcl->ceil->rate), NULL);
++		if (!cl->rate || !cl->ceil) {
++			sch_tree_unlock(sch);
++			if (cl->rate)
++				qdisc_put_rtab(cl->rate);
++			if (cl->ceil)
++				qdisc_put_rtab(cl->ceil);
++			qdisc_destroy(cl->un.leaf.q);
++			kfree(cl);
++			cl = NULL;
++			goto out;
++		}
++		PSCHED_GET_TIME(cl->t_c);
++		cl->cmode = HTB_CAN_SEND;
++		list_add_tail(&cl->clist, &q->clist);
++		list_add_tail(&cl->sibling, &(gcl->parent)->children);
++		(*a)[HTB_CLS_INDEX(minorid)] = cl;
++		q->clscnt++;
++#ifdef HTB_DEBUG
++		{
++			int i;
++			for (i = 0; i < TC_HTB_NUMPRIO; i++)
++				cl->node[i].rb_color = -1;
++			cl->pq_node.rb_color = -1;
++		}
++#endif
++		sch_tree_unlock(sch);
++	} else {
++		printk(KERN_ERR "HTB: allocate class failed\n");
++	}
++out:
++	return cl;
++}
++
+ /* find class in class arrays using given handle */
+ static __inline__ struct htb_class *htb_find(u32 handle, struct Qdisc *sch)
+ {
+@@ -298,9 +405,8 @@ static __inline__ struct htb_class *htb_
+ 
+ 	minorid = TC_H_MIN(handle);
+ 	a = q->classes[HTB_CLS_ARRAY(minorid)];
+-	if (a == NULL)
++	if (unlikely(a == NULL))
+ 		return NULL;
+-
+ 	return (*a)[HTB_CLS_INDEX(minorid)];
+ }
+ 
+@@ -357,7 +463,7 @@ static struct htb_class *htb_classify(st
+ 		if ((cl = (void *)res.class) == NULL) {
+ 			if (res.classid == sch->handle)
+ 				return HTB_DIRECT;	/* X:0 (direct flow) */
+-			if ((cl = htb_find(res.classid, sch)) == NULL)
++			if ((cl = __htb_find(res.classid, sch)) == NULL)
+ 				break;	/* filter selected invalid classid */
+ 		}
+ 		if (!cl->level)
+@@ -1353,6 +1459,7 @@ static int htb_init(struct Qdisc *sch, s
+ 
+ 	INIT_LIST_HEAD(&q->root);
+ 	INIT_LIST_HEAD(&q->clist);
++	INIT_LIST_HEAD(&q->glist);
+ 	for (i = 0; i < TC_HTB_NUMPRIO; i++)
+ 		INIT_LIST_HEAD(q->drops + i);
+ 
+@@ -1479,8 +1586,12 @@ htb_dump_class_stats(struct Qdisc *sch, 
+ static int htb_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
+ 		     struct Qdisc **old)
+ {
++#ifdef HTB_DEBUG
++	struct htb_sched *q = qdisc_priv(sch);
++#endif
+ 	struct htb_class *cl = (struct htb_class *)arg;
+ 
++	HTB_DBG(0, 1, "htb_graft q=%p cl=%X ref=%d\n", q, cl ? cl->classid : 0, cl ? cl->refcnt : 0);
+ 	if (cl && !cl->level) {
+ 		if (new == NULL && (new = qdisc_create_dflt(sch->dev, &pfifo_qdisc_ops)) == NULL)
+ 			return -ENOBUFS;
+@@ -1546,6 +1657,8 @@ static void htb_destroy_class(struct Qdi
+ 	while (!list_empty(&cl->children))
+ 		htb_destroy_class(sch, list_entry(cl->children.next, struct htb_class, sibling));
+ 
++	if (cl->group)
++		list_del(&cl->glist);
+ 	/* note: this delete may happen twice (see htb_delete) */
+ 	list_del(&cl->clist);
+ 	list_del(&cl->sibling);
+@@ -1645,7 +1758,7 @@ static int htb_change_class(struct Qdisc
+ 	struct qdisc_rate_table *rtab = NULL, *ctab = NULL;
+ 	struct rtattr *tb[TCA_HTB_RTAB];
+ 	struct tc_htb_opt *hopt;
+-	int minorid = TC_H_MIN(classid);
++	u32 minorid = TC_H_MIN(classid);
+ 
+ 	/* extract all subattrs from opt attr */
+ 	if (!opt || rtattr_parse_nested(tb, TCA_HTB_RTAB, opt) ||
+@@ -1670,7 +1783,10 @@ static int htb_change_class(struct Qdisc
+ 		/* check for valid classid */
+ 		if (!classid || TC_H_MAJ(classid ^ sch->handle) || htb_find(classid, sch))
+ 			goto failure;
+-
++		/* check members range */
++		if ((minorid + hopt->group) > TC_H_MIN(-1)) {
++			goto failure;
++		}
+ 		/* check maximal depth */
+ 		if (parent && parent->parent && parent->parent->level < 2) {
+ 			printk(KERN_ERR "htb: tree is too deep\n");
+@@ -1688,6 +1804,7 @@ static int htb_change_class(struct Qdisc
+ 		cl->refcnt = 1;
+ 		INIT_LIST_HEAD(&cl->sibling);
+ 		INIT_LIST_HEAD(&cl->clist);
++		INIT_LIST_HEAD(&cl->glist);
+ 		INIT_LIST_HEAD(&cl->children);
+ 		INIT_LIST_HEAD(&cl->un.leaf.drop_list);
+ #ifdef HTB_DEBUG
+@@ -1716,7 +1833,6 @@ static int htb_change_class(struct Qdisc
+ 		}
+ 		/* leaf (we) needs elementary qdisc */
+ 		cl->un.leaf.q = new_q ? new_q : &noop_qdisc;
+-
+ 		cl->classid = classid;
+ 		cl->parent = parent;
+ 
+@@ -1740,6 +1856,11 @@ static int htb_change_class(struct Qdisc
+ 			cl->pq_node.rb_color = -1;
+ 		}
+ #endif
++		if (hopt->group != 0) {
++			/* XXX: didn't check on overlap */
++			cl->group = hopt->group;
++			list_add_tail(&cl->glist, &q->glist);
++		}
+ 	} else
+ 		sch_tree_lock(sch);
+ 

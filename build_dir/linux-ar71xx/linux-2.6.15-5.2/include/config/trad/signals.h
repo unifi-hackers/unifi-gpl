@@ -1,0 +1,1 @@
+#define CONFIG_TRAD_SIGNALS 1

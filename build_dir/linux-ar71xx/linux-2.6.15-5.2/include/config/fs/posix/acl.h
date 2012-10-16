@@ -1,0 +1,1 @@
+#undef CONFIG_FS_POSIX_ACL

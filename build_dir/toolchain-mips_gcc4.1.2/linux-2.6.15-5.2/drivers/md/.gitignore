@@ -1,0 +1,12 @@
+mktables
+raid6altivec1.c
+raid6altivec2.c
+raid6altivec4.c
+raid6altivec8.c
+raid6int1.c
+raid6int2.c
+raid6int4.c
+raid6int8.c
+raid6int16.c
+raid6int32.c
+raid6tables.c

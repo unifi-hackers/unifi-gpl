@@ -1,0 +1,1 @@
+#define CONFIG_CRYPTO_MD5_MODULE 1

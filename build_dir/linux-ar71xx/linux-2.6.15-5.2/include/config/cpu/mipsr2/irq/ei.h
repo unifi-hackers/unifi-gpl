@@ -1,0 +1,1 @@
+#undef CONFIG_CPU_MIPSR2_IRQ_EI

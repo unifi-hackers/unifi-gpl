@@ -1,0 +1,102 @@
+config NEC_CMBVR4133
+	bool "Support for NEC CMB-VR4133"
+	depends on MACH_VR41XX
+	select CPU_VR41XX
+	select DMA_NONCOHERENT
+	select IRQ_CPU
+	select HW_HAS_PCI
+	select PCI_VR41XX
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+
+config ROCKHOPPER
+	bool "Support for Rockhopper baseboard"
+	depends on NEC_CMBVR4133
+	select I8259
+	select HAVE_STD_PC_SERIAL_PORT
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+
+config CASIO_E55
+	bool "Support for CASIO CASSIOPEIA E-10/15/55/65"
+	depends on MACH_VR41XX
+	select DMA_NONCOHERENT
+	select IRQ_CPU
+	select ISA
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+
+config IBM_WORKPAD
+	bool "Support for IBM WorkPad z50"
+	depends on MACH_VR41XX
+	select DMA_NONCOHERENT
+	select IRQ_CPU
+	select ISA
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+
+config TANBAC_TB022X
+	bool "Support for TANBAC TB0225 (VR4131 multichip module) and TB0229 (VR4131DIMM)"
+	depends on MACH_VR41XX
+	select DMA_NONCOHERENT
+	select HW_HAS_PCI
+	select IRQ_CPU
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+	help
+	  The TANBAC TB0225 (VR4131 multichip module) and TB0229 (VR4131DIMM)
+	  are MIPS-based platforms manufactured by TANBAC.
+	  Please refer to <http://www.tanbac.co.jp/> about
+	  VR4131 Multi-chip module and VR4131DIMM.
+
+config TANBAC_TB0226
+	bool "Support for TANBAC TB0226 (Mbase)"
+	depends on TANBAC_TB022X
+	select PCI
+	select PCI_VR41XX
+	select GPIO_VR41XX
+	help
+	  The TANBAC TB0226 (Mbase) is a MIPS-based platform manufactured by
+	  TANBAC.  Please refer to <http://www.tanbac.co.jp/> about Mbase.
+
+config VICTOR_MPC30X
+	bool "Support for Victor MP-C303/304"
+	depends on MACH_VR41XX
+	select DMA_NONCOHERENT
+	select HW_HAS_PCI
+	select IRQ_CPU
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+	depends on MACH_VR41XX
+
+config ZAO_CAPCELLA
+	bool "Support for ZAO Networks Capcella"
+	depends on MACH_VR41XX
+	select DMA_NONCOHERENT
+	select HW_HAS_PCI
+	select IRQ_CPU
+	select SYS_HAS_CPU_VR41XX
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL if EXPERIMENTAL
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+
+config PCI_VR41XX
+	bool "Add PCI control unit support of NEC VR4100 series"
+	depends on MACH_VR41XX && PCI
+
+config VRC4173
+	tristate "Add NEC VRC4173 companion chip support"
+	depends on MACH_VR41XX && PCI_VR41XX
+	help
+	  The NEC VRC4173 is a companion chip for NEC VR4122/VR4131.

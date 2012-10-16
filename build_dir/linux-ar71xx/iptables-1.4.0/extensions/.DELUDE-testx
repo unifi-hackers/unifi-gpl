@@ -1,0 +1,3 @@
+#! /bin/sh
+
+[ -f "$KERNEL_DIR/net/netfilter/xt_DELUDE.c" ] && echo "DELUDE"

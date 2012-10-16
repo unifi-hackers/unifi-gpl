@@ -1,0 +1,66 @@
+--- a/include/linux/netfilter_bridge/ebt_mark_t.h
++++ b/include/linux/netfilter_bridge/ebt_mark_t.h
+@@ -1,6 +1,18 @@
+ #ifndef __LINUX_BRIDGE_EBT_MARK_T_H
+ #define __LINUX_BRIDGE_EBT_MARK_T_H
+
++/* The target member is reused for adding new actions, the
++ * value of the real target is -1 to -NUM_STANDARD_TARGETS.
++ * For backward compatibility, the 4 lsb (2 would be enough,
++ * but let's play it safe) are kept to designate this target.
++ * The remaining bits designate the action. By making the set
++ * action 0xfffffff0, the result will look ok for older
++ * versions. [September 2006] */
++#define MARK_SET_VALUE (0xfffffff0)
++#define MARK_OR_VALUE  (0xffffffe0)
++#define MARK_AND_VALUE (0xffffffd0)
++#define MARK_XOR_VALUE (0xffffffc0)
++
+ struct ebt_mark_t_info
+ {
+	unsigned long mark;
+--- a/net/bridge/netfilter/ebt_mark.c
++++ b/net/bridge/netfilter/ebt_mark.c
+@@ -22,24 +22,37 @@ static int ebt_target_mark(struct sk_buf
+    const void *data, unsigned int datalen)
+ {
+	struct ebt_mark_t_info *info = (struct ebt_mark_t_info *)data;
++	int action = info->target & -16;
+
+-	if ((*pskb)->nfmark != info->mark)
++	if (action == MARK_SET_VALUE)
+		(*pskb)->nfmark = info->mark;
++	else if (action == MARK_OR_VALUE)
++		(*pskb)->nfmark |= info->mark;
++	else if (action == MARK_AND_VALUE)
++		(*pskb)->nfmark &= info->mark;
++	else
++		(*pskb)->nfmark ^= info->mark;
+
+-	return info->target;
++	return info->target | -16;
+ }
+
+ static int ebt_target_mark_check(const char *tablename, unsigned int hookmask,
+    const struct ebt_entry *e, void *data, unsigned int datalen)
+ {
+	struct ebt_mark_t_info *info = (struct ebt_mark_t_info *)data;
++	int tmp;
+
+	if (datalen != EBT_ALIGN(sizeof(struct ebt_mark_t_info)))
+		return -EINVAL;
+-	if (BASE_CHAIN && info->target == EBT_RETURN)
++	tmp = info->target | -16;
++	if (BASE_CHAIN && tmp == EBT_RETURN)
+		return -EINVAL;
+	CLEAR_BASE_CHAIN_BIT;
+-	if (INVALID_TARGET)
++	if (tmp < -NUM_STANDARD_TARGETS || tmp >= 0)
++		return -EINVAL;
++	tmp = info->target & -16;
++	if (tmp != MARK_SET_VALUE && tmp != MARK_OR_VALUE &&
++	    tmp != MARK_AND_VALUE && tmp != MARK_XOR_VALUE)
+		return -EINVAL;
+	return 0;
+ }
+

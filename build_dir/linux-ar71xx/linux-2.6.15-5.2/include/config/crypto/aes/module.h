@@ -1,0 +1,1 @@
+#define CONFIG_CRYPTO_AES_MODULE 1

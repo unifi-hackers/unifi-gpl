@@ -1,0 +1,1 @@
+#define CONFIG_CRYPTO_SHA1 1

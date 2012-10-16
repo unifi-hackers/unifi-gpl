@@ -1,0 +1,1 @@
+#define CONFIG_HW_HAS_PCI 1

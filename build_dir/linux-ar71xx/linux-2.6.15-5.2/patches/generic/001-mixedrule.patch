@@ -1,0 +1,16 @@
+diff -urN a/Makefile b/Makefile
+--- a/Makefile	2010-01-11 22:12:31.000000000 -0800
++++ b/Makefile	2010-12-29 14:55:43.000000000 -0800
+@@ -449,7 +449,11 @@
+ include $(srctree)/arch/$(ARCH)/Makefile
+ export KBUILD_DEFCONFIG
+ 
+-config %config: scripts_basic outputmakefile FORCE
++config: scripts_basic outputmakefile FORCE
++	$(Q)mkdir -p include/linux
++	$(Q)$(MAKE) $(build)=scripts/kconfig $@
++
++%config: scripts_basic outputmakefile FORCE
+ 	$(Q)mkdir -p include/linux
+ 	$(Q)$(MAKE) $(build)=scripts/kconfig $@
+ 

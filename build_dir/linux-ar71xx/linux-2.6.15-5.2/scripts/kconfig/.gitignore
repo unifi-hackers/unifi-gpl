@@ -1,0 +1,18 @@
+#
+# Generated files
+#
+config*
+lex.*.c
+*.tab.c
+*.tab.h
+lkc_defs.h
+qconf.moc
+
+#
+# configuration programs
+#
+conf
+mconf
+qconf
+gconf
+kxgettext

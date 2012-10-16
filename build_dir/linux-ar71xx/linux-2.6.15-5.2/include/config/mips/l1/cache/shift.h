@@ -1,0 +1,1 @@
+#define CONFIG_MIPS_L1_CACHE_SHIFT 5

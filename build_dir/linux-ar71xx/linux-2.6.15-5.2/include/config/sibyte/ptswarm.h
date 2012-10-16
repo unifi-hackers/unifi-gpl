@@ -1,0 +1,1 @@
+#undef CONFIG_SIBYTE_PTSWARM

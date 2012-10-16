@@ -1,0 +1,1 @@
+#define CONFIG_RUNTIME_DEBUG 1

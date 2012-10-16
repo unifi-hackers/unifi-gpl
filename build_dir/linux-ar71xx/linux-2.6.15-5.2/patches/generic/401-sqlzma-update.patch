@@ -1,0 +1,273 @@
+--- a/fs/Makefile
++++ b/fs/Makefile
+@@ -55,6 +55,7 @@ obj-$(CONFIG_EXT3_FS)		+= ext3/ # Before
+ obj-$(CONFIG_JBD)		+= jbd/
+ obj-$(CONFIG_EXT2_FS)		+= ext2/
+ obj-$(CONFIG_CRAMFS)		+= cramfs/
++obj-$(CONFIG_SQUASHFS)		+= squashfs/
+ obj-$(CONFIG_RAMFS)		+= ramfs/
+ obj-$(CONFIG_HUGETLBFS)		+= hugetlbfs/
+ obj-$(CONFIG_CODA_FS)		+= coda/
+@@ -102,4 +103,3 @@ obj-$(CONFIG_BEFS_FS)		+= befs/
+ obj-$(CONFIG_HOSTFS)		+= hostfs/
+ obj-$(CONFIG_HPPFS)		+= hppfs/
+ obj-$(CONFIG_DEBUG_FS)		+= debugfs/
+-obj-$(CONFIG_SQUASHFS)		+= squashfs/
+--- a/fs/squashfs/LzmaDecode.c
++++ b/fs/squashfs/LzmaDecode.c
+@@ -2,7 +2,7 @@
+   LzmaDecode.c
+   LZMA Decoder (optimized for Speed version)
+   
+-  LZMA SDK 4.22 Copyright (c) 1999-2005 Igor Pavlov (2005-06-10)
++  LZMA SDK 4.40 Copyright (c) 1999-2006 Igor Pavlov (2006-05-01)
+   http://www.7-zip.org/
+ 
+   LZMA SDK is licensed under two licenses:
+--- a/fs/squashfs/LzmaDecode.h
++++ b/fs/squashfs/LzmaDecode.h
+@@ -2,7 +2,7 @@
+   LzmaDecode.h
+   LZMA Decoder interface
+ 
+-  LZMA SDK 4.21 Copyright (c) 1999-2005 Igor Pavlov (2005-06-08)
++  LZMA SDK 4.40 Copyright (c) 1999-2006 Igor Pavlov (2006-05-01)
+   http://www.7-zip.org/
+ 
+   LZMA SDK is licensed under two licenses:
+--- a/fs/squashfs/inode.c
++++ b/fs/squashfs/inode.c
+@@ -54,7 +54,7 @@
+ 
+ struct sqlzma {
+ #ifdef KeepPreemptive
+-	struct mutex mtx;
++	struct semaphore mtx;
+ #endif
+ 	unsigned char read_data[SQUASHFS_FILE_MAX_SIZE];
+ 	struct sqlzma_un un;
+@@ -275,36 +275,36 @@ SQSH_EXTERN unsigned int squashfs_read_d
+ 		struct sized_buf sbuf[2];
+ 		struct sqlzma *percpu;
+ 		unsigned char *p;
++
+ 		/*
+ 	 	* uncompress block
+ 	 	*/
+ 
+-		/* mutex_lock(&msblk->read_data_mutex); */
+- 
++		/* down(&msblk->read_data_mutex); */
++
+ 		start = k;
+ 		for (; k < b; k++) {
+- 			wait_on_buffer(bh[k]);
+- 			if (!buffer_uptodate(bh[k]))
+- 				goto release_mutex;
++			wait_on_buffer(bh[k]);
++			if (!buffer_uptodate(bh[k]))
++				goto release_mutex;
+ 		}
++
+ 		/* it disables preemption */
+ 		percpu = get_cpu_var(sqlzma);
+ #ifdef KeepPreemptive
+ 		put_cpu_var(sqlzma);
+-		mutex_lock(&percpu->mtx);
++		down(&percpu->mtx);
+ #endif
+ 		p = percpu->read_data;
+ 		k = start;
+ 		for (bytes = 0; k < b; k++) {
+ 			avail_bytes = min(c_byte - bytes, msblk->devblksize - offset);
+- 
+ 
+ 			if (k == 0) {
+ 				/*
+ 				 * keep this block structture to simplify the
+ 				 * diff.
+ 				 */
+-
+ 				if (avail_bytes == 0) {
+ 					offset = 0;
+ 					brelse(bh[k]);
+@@ -323,9 +323,6 @@ SQSH_EXTERN unsigned int squashfs_read_d
+ 			brelse(bh[k]);
+ 		}
+ 
+-		if (zlib_err != Z_STREAM_END)
+-			goto release_mutex;
+-
+ 		sbuf[Src].buf = percpu->read_data;
+ 		sbuf[Src].sz = bytes;
+ 		sbuf[Dst].buf = buffer;
+@@ -337,15 +334,15 @@ SQSH_EXTERN unsigned int squashfs_read_d
+ 		bytes = percpu->un.un_reslen;
+ 
+ #ifdef KeepPreemptive
+-		mutex_unlock(&percpu->mtx);
++		up(&percpu->mtx);
+ #else
+ 		put_cpu_var(sqlzma);
+ #endif
+ 		if (unlikely(zlib_err)) {
+ 			dpri("zlib_err %d\n", zlib_err);
+- 			goto release_mutex;
+- 		}
+-		/* mutex_unlock(&msblk->read_data_mutex); */
++			goto release_mutex;
++		}
++		/* up(&msblk->read_data_mutex); */
+ 	} else {
+ 		int i;
+ 
+@@ -373,7 +370,7 @@ SQSH_EXTERN unsigned int squashfs_read_d
+ 	return bytes;
+ 
+ release_mutex:
+-	/*up(&msblk->read_data_mutex);*/
++	/* up(&msblk->read_data_mutex); */
+ 
+ block_release:
+ 	for (; k < b; k++)
+@@ -1132,7 +1129,7 @@ static int squashfs_fill_super(struct su
+ 	msblk->devblksize = sb_min_blocksize(s, BLOCK_SIZE);
+ 	msblk->devblksize_log2 = ffz(~msblk->devblksize);
+ 
+-	//init_MUTEX(&msblk->read_data_mutex);
++	/* init_MUTEX(&msblk->read_data_mutex); */
+ 	init_MUTEX(&msblk->read_page_mutex);
+ 	init_MUTEX(&msblk->meta_index_mutex);
+ 	
+@@ -2162,7 +2159,7 @@ static void free_sqlzma(void)
+ 			mutex_destroy(&p->mtx);
+ #endif
+ 			sqlzma_fin(&p->un);
+-			kfree(p);
++			vfree(p);
+ 		}
+ 	}
+ }
+@@ -2178,8 +2175,7 @@ static int __init init_squashfs_fs(void)
+ 	for_each_online_cpu(cpu) {
+ 		dpri("%d: %p\n", cpu, per_cpu(sqlzma, cpu));
+ 		err = -ENOMEM;
+-		//p = kmalloc(sizeof(struct sqlzma), GFP_KERNEL);
+-		p = vmalloc(sizeof(struct sqlzma));	
++		p = vmalloc(sizeof(struct sqlzma));
+ 		if (p) {
+ #ifdef KeepPreemptive
+ 			mutex_init(&p->mtx);
+--- a/fs/squashfs/sqlzma.h
++++ b/fs/squashfs/sqlzma.h
+@@ -5,7 +5,7 @@
+  * LICENSE follows the described one in lzma.
+  */
+ 
+-/* $Id: //depot/sw/releases/7.3_AP/linux/kernels/mips-linux-2.6.15/fs/squashfs/sqlzma.h#1 $ */
++/* $Id: sqlzma.h,v 1.20 2008-03-12 16:58:34 jro Exp $ */
+ 
+ #ifndef __sqlzma_h__
+ #define __sqlzma_h__
+--- a/fs/squashfs/sqmagic.h
++++ b/fs/squashfs/sqmagic.h
+@@ -5,7 +5,7 @@
+  * LICENSE must follow the one in squashfs.
+  */
+ 
+-/* $Id: //depot/sw/releases/7.3_AP/linux/kernels/mips-linux-2.6.15/fs/squashfs/sqmagic.h#1 $ */
++/* $Id: sqmagic.h,v 1.2 2006-11-27 03:54:58 jro Exp $ */
+ 
+ #ifndef __sqmagic_h__
+ #define __sqmagic_h__
+--- a/fs/squashfs/uncomp.c
++++ b/fs/squashfs/uncomp.c
+@@ -5,7 +5,7 @@
+  * LICENSE follows the described one in lzma.txt.
+  */
+ 
+-/* $Id: //depot/sw/releases/7.3_AP/linux/kernels/mips-linux-2.6.15/fs/squashfs/uncomp.c#1 $ */
++/* $Id: uncomp.c,v 1.7 2008-03-12 16:58:34 jro Exp $ */
+ 
+ /* extract some parts from lzma443/C/7zip/Compress/LZMA_C/LzmaTest.c */
+ 
+@@ -216,7 +216,7 @@ module_exit(sqlzma_exit);
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("Junjiro Okajima <sfjro at users dot sf dot net>");
+-MODULE_VERSION("$Id: //depot/sw/releases/7.3_AP/linux/kernels/mips-linux-2.6.15/fs/squashfs/uncomp.c#1 $");
++MODULE_VERSION("$Id: uncomp.c,v 1.7 2008-03-12 16:58:34 jro Exp $");
+ MODULE_DESCRIPTION("LZMA uncompress for squashfs. "
+ 		   "Some functions for squashfs to support LZMA and "
+ 		   "a tiny wrapper for LzmaDecode.c in LZMA SDK from www.7-zip.org.");
+--- a/include/linux/squashfs_fs_sb.h
++++ b/include/linux/squashfs_fs_sb.h
+@@ -63,11 +63,11 @@ struct squashfs_sb_info {
+ 	long long		*fragment_index;
+ 	unsigned int		*fragment_index_2;
+ 	char			*read_page;
+-	//struct semaphore		read_data_mutex;
+-	struct semaphore		read_page_mutex;
+-	struct semaphore		meta_index_mutex;
++	/* struct semaphore	read_data_mutex; */
++	struct semaphore	read_page_mutex;
++	struct semaphore	meta_index_mutex;
+ 	struct meta_index	*meta_index;
+-	//z_stream		stream;
++	/* z_stream		stream; */
+ 	long long		*inode_lookup_table;
+ 	int			(*read_inode)(struct inode *i,  squashfs_inode_t \
+ 				inode);
+--- a/init/do_mounts_rd.c
++++ b/init/do_mounts_rd.c
+@@ -5,6 +5,7 @@
+ #include <linux/ext2_fs.h>
+ #include <linux/romfs_fs.h>
+ #include <linux/cramfs_fs.h>
++#include <linux/squashfs_fs.h>
+ #include <linux/initrd.h>
+ #include <linux/string.h>
+ 
+@@ -39,6 +40,7 @@ static int __init crd_load(int in_fd, in
+  * numbers could not be found.
+  *
+  * We currently check for the following magic numbers:
++ *      squashfs
+  * 	minix
+  * 	ext2
+  *	romfs
+@@ -53,6 +55,7 @@ identify_ramdisk_image(int fd, int start
+ 	struct ext2_super_block *ext2sb;
+ 	struct romfs_super_block *romfsb;
+ 	struct cramfs_super *cramfsb;
++	struct squashfs_super_block *squashfsb;
+ 	int nblocks = -1;
+ 	unsigned char *buf;
+ 
+@@ -64,6 +67,7 @@ identify_ramdisk_image(int fd, int start
+ 	ext2sb = (struct ext2_super_block *) buf;
+ 	romfsb = (struct romfs_super_block *) buf;
+ 	cramfsb = (struct cramfs_super *) buf;
++	squashfsb = (struct squashfs_super_block *) buf;
+ 	memset(buf, 0xe5, size);
+ 
+ 	/*
+@@ -101,6 +105,18 @@ identify_ramdisk_image(int fd, int start
+ 		goto done;
+ 	}
+ 
++	/* squashfs is at block zero too */
++	if (squashfsb->s_magic == SQUASHFS_MAGIC) {
++		printk(KERN_NOTICE
++		       "RAMDISK: squashfs filesystem found at block %d\n",
++		       start_block);
++		if (squashfsb->s_major < 3)
++			nblocks = (squashfsb->bytes_used_2+BLOCK_SIZE-1)>>BLOCK_SIZE_BITS;
++		else
++			nblocks = (squashfsb->bytes_used+BLOCK_SIZE-1)>>BLOCK_SIZE_BITS;
++		goto done;
++	}
++
+ 	/*
+ 	 * Read block 1 to test for minix and ext2 superblock
+ 	 */

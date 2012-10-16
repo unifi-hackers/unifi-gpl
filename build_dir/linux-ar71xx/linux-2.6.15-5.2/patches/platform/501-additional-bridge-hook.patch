@@ -1,0 +1,189 @@
+--- a/include/linux/if_bridge.h
++++ b/include/linux/if_bridge.h
+@@ -107,6 +107,7 @@ struct __fdb_entry
+ extern void brioctl_set(int (*ioctl_hook)(unsigned int, void __user *));
+ extern int (*br_handle_frame_hook)(struct net_bridge_port *p, struct sk_buff **pskb);
+ extern int (*br_should_route_hook)(struct sk_buff **pskb);
++extern int (*br_handle_entry_hook) (struct net_bridge_port *p, void *fdb, int oper, void *context);
+ 
+ #endif
+ 
+--- a/net/bridge/br.c
++++ b/net/bridge/br.c
+@@ -23,6 +23,7 @@
+ #include "br_private.h"
+ 
+ int (*br_should_route_hook) (struct sk_buff **pskb) = NULL;
++int (*br_handle_entry_hook) (struct net_bridge_port *p, void *fdb, int oper, void *context) = NULL;
+ 
+ static int __init br_init(void)
+ {
+@@ -63,6 +64,7 @@ static void __exit br_deinit(void)
+ }
+ 
+ EXPORT_SYMBOL(br_should_route_hook);
++EXPORT_SYMBOL(br_handle_entry_hook);
+ 
+ module_init(br_init)
+ module_exit(br_deinit)
+--- a/net/bridge/br_fdb.c
++++ b/net/bridge/br_fdb.c
+@@ -69,6 +69,8 @@ static __inline__ int br_mac_hash(const 
+ 
+ static __inline__ void fdb_delete(struct net_bridge_fdb_entry *f)
+ {
++	if (br_handle_entry_hook)
++		br_handle_entry_hook(NULL, (void *)f, BR_FDB_ENTRY_DEL, NULL);
+ 	hlist_del_rcu(&f->hlist);
+ 	br_fdb_put(f);
+ }
+@@ -299,6 +301,7 @@ static struct net_bridge_fdb_entry *fdb_
+ 		fdb->is_local = is_local;
+ 		fdb->is_static = is_local;
+ 		fdb->ageing_timer = jiffies;
++		fdb->flags = 0;
+ 		BR_INCR_ENTRIES();
+ 	}
+ 	return fdb;
+@@ -344,15 +347,15 @@ int br_fdb_insert(struct net_bridge *br,
+ 	return ret;
+ }
+ 
+-void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
+-		   const unsigned char *addr)
++struct net_bridge_fdb_entry *br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
++		   const unsigned char *addr, void *context)
+ {
+ 	struct hlist_head *head = &br->hash[br_mac_hash(addr)];
+ 	struct net_bridge_fdb_entry *fdb;
+ 
+ 	/* some users want to always flood. */
+ 	if (hold_time(br) == 0)
+-		return;
++		return NULL;
+ 
+ 	rcu_read_lock();
+ 	fdb = fdb_find(head, addr);
+@@ -370,12 +373,16 @@ void br_fdb_update(struct net_bridge *br
+ 		}
+ 	} else {
+ 		spin_lock_bh(&br->hash_lock);
+-		if (!fdb_find(head, addr))
+-			fdb_create(head, source, addr, 0);
++		if (!fdb_find(head, addr)) {
++			fdb = fdb_create(head, source, addr, 0);
++			if (br_handle_entry_hook)
++				br_handle_entry_hook(source, (void *)fdb, BR_FDB_ENTRY_ADD, context);
++		}
+ 		/* else  we lose race and someone else inserts
+ 		 * it first, don't bother updating
+ 		 */
+ 		spin_unlock_bh(&br->hash_lock);
+ 	}
+ 	rcu_read_unlock();
++	return fdb;
+ }
+--- a/net/bridge/br_input.c
++++ b/net/bridge/br_input.c
+@@ -47,7 +47,7 @@ int br_handle_frame_finish(struct sk_buf
+ 	const unsigned char *dest = eth_hdr(skb)->h_dest;
+ 	struct net_bridge_port *p = rcu_dereference(skb->dev->br_port);
+ 	struct net_bridge *br;
+-	struct net_bridge_fdb_entry *dst;
++	struct net_bridge_fdb_entry *dst, *src;
+ 	int passedup = 0;
+ 
+ 	if (unlikely(!p || p->state == BR_STATE_DISABLED)) {
+@@ -57,7 +57,9 @@ int br_handle_frame_finish(struct sk_buf
+ 
+ 	br = p->br;
+ 	/* insert into forwarding database after filtering to avoid spoofing */
+-	br_fdb_update(p->br, p, eth_hdr(skb)->h_source);
++ 	src = br_fdb_update(p->br, p, eth_hdr(skb)->h_source, (void *)skb);
++ 	if (br_handle_entry_hook)
++ 		br_handle_entry_hook(p, (void *)src, BR_FDB_ENTRY_SRC, (void *)skb);
+ 
+ 	if (br->dev->flags & IFF_PROMISC) {
+ 		struct sk_buff *skb2;
+@@ -70,6 +72,8 @@ int br_handle_frame_finish(struct sk_buf
+ 	}
+ 
+ 	if (dest[0] & 1) {
++		if (br_handle_entry_hook)
++			br_handle_entry_hook(p, (void *)src, BR_FDB_ENTRY_FWD, (void *)skb);
+ 		br_flood_forward(br, skb, !passedup);
+ 		if (!passedup)
+ 			br_pass_frame_up(br, skb);
+@@ -86,10 +90,14 @@ int br_handle_frame_finish(struct sk_buf
+ 	}
+ 
+ 	if (dst != NULL) {
++		if (br_handle_entry_hook)
++			br_handle_entry_hook(dst->dst, (void *)dst, BR_FDB_ENTRY_DST, (void *)skb);
+ 		br_forward(dst->dst, skb);
+ 		goto out;
+ 	}
+ 
++	if (br_handle_entry_hook)
++		br_handle_entry_hook(p, (void *)src, BR_FDB_ENTRY_FWD, (void *)skb);
+ 	br_flood_forward(br, skb, 0);
+ 
+ out:
+@@ -114,7 +122,7 @@ int br_handle_frame(struct net_bridge_po
+ 		goto err;
+ 
+ 	if (p->state == BR_STATE_LEARNING)
+-		br_fdb_update(p->br, p, eth_hdr(skb)->h_source);
++		br_fdb_update(p->br, p, eth_hdr(skb)->h_source, (void *)skb);
+ 
+ 	if (p->br->stp_enabled &&
+ 	    !memcmp(dest, bridge_ula, 5) &&
+--- a/net/bridge/br_private.h
++++ b/net/bridge/br_private.h
+@@ -46,6 +46,14 @@ struct mac_addr
+ 	unsigned char	addr[6];
+ };
+ 
++enum {
++	BR_FDB_ENTRY_ADD = 0,
++	BR_FDB_ENTRY_DEL,
++	BR_FDB_ENTRY_SRC,
++	BR_FDB_ENTRY_DST,
++	BR_FDB_ENTRY_FWD,
++};
++
+ struct net_bridge_fdb_entry
+ {
+ 	struct hlist_node		hlist;
+@@ -57,6 +65,8 @@ struct net_bridge_fdb_entry
+ 	mac_addr			addr;
+ 	unsigned char			is_local;
+ 	unsigned char			is_static;
++
++	unsigned long			flags;
+ };
+ 
+ struct net_bridge_port
+@@ -153,9 +163,9 @@ extern int br_fdb_fillbuf(struct net_bri
+ extern int br_fdb_insert(struct net_bridge *br,
+ 			 struct net_bridge_port *source,
+ 			 const unsigned char *addr);
+-extern void br_fdb_update(struct net_bridge *br,
++extern struct net_bridge_fdb_entry *br_fdb_update(struct net_bridge *br,
+ 			  struct net_bridge_port *source,
+-			  const unsigned char *addr);
++			  const unsigned char *addr, void *context);
+ 
+ /* br_forward.c */
+ extern void br_deliver(const struct net_bridge_port *to,
+--- a/net/bridge/br_stp_bpdu.c
++++ b/net/bridge/br_stp_bpdu.c
+@@ -144,7 +144,7 @@ int br_stp_handle_bpdu(struct sk_buff *s
+ 		goto err;
+ 
+ 	/* insert into forwarding database after filtering to avoid spoofing */
+-	br_fdb_update(p->br, p, eth_hdr(skb)->h_source);
++	br_fdb_update(p->br, p, eth_hdr(skb)->h_source, (void *)skb);
+ 
+ 	/* need at least the 802 and STP headers */
+ 	if (!pskb_may_pull(skb, sizeof(header)+1) ||

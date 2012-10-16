@@ -1,0 +1,1 @@
+#define CONFIG_USB_ARCH_HAS_EHCI 1

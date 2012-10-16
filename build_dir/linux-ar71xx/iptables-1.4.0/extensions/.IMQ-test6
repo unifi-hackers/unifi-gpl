@@ -1,0 +1,3 @@
+#!/bin/sh
+# True if IMQ target patch is applied.
+[ -f $KERNEL_DIR/include/linux/netfilter_ipv6/ip6t_IMQ.h ] && echo IMQ

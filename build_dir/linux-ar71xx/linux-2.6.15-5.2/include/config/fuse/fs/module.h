@@ -1,0 +1,1 @@
+#define CONFIG_FUSE_FS_MODULE 1

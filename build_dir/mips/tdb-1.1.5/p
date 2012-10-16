@@ -1,0 +1,27 @@
+diff --git a/lib/replace/libreplace_ld.m4 b/lib/replace/libreplace_ld.m4
+index 8ab5e78..90c5be6 100644
+--- a/lib/replace/libreplace_ld.m4
++++ b/lib/replace/libreplace_ld.m4
+@@ -248,6 +248,22 @@ AC_DEFUN([AC_LD_SONAMEFLAG],
+ 		esac
+ ])
+ 
++AC_DEFUN([AC_LD_VERSIONSCRIPT],
++[
++	AC_SUBST(VERSIONSCRIPT)
++	VERSIONSCRIPT=""
++	case "$host_os" in 
++		*linux*|*gnu*)
++			VERSIONSCRIPT="-Wl,--version-script"
++			;;
++		*solaris*)
++			if test "${GCC}" = "yes"; then
++				VERSIONSCRIPT="-Wl,--version-script"
++			fi
++			;;
++		esac
++])
++
+ AC_DEFUN([AC_LIBREPLACE_MDLD],
+ [
+ 	AC_REQUIRE([AC_LIBREPLACE_LD_SHLIB_LINKER])

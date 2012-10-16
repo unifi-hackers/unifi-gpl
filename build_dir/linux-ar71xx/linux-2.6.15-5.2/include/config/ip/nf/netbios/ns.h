@@ -1,0 +1,1 @@
+#undef CONFIG_IP_NF_NETBIOS_NS

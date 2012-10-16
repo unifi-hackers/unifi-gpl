@@ -1,0 +1,1 @@
+#define CONFIG_CPU_BIG_ENDIAN 1

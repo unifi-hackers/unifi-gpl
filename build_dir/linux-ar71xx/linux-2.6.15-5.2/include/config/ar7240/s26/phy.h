@@ -1,0 +1,1 @@
+#define CONFIG_AR7240_S26_PHY 1

@@ -1,0 +1,1 @@
+#define CONFIG_MACH_AR7240 1

@@ -1,0 +1,1 @@
+#define CONFIG_CRC16 1

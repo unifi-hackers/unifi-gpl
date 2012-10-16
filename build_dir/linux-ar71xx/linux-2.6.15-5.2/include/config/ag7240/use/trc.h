@@ -1,0 +1,1 @@
+#undef CONFIG_AG7240_USE_TRC

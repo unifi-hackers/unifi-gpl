@@ -1,0 +1,103 @@
+Index: linux-2.6.15-5.2/include/linux/pkt_cls.h
+===================================================================
+--- linux-2.6.15-5.2.orig/include/linux/pkt_cls.h
++++ linux-2.6.15-5.2/include/linux/pkt_cls.h
+@@ -303,8 +303,9 @@ enum
+ 	TCA_FW_UNSPEC,
+ 	TCA_FW_CLASSID,
+ 	TCA_FW_POLICE,
+-	TCA_FW_INDEV, /*  used by CONFIG_NET_CLS_IND */
+-	TCA_FW_ACT, /* used by CONFIG_NET_CLS_ACT */
++	TCA_FW_INDEV,	/* used by CONFIG_NET_CLS_IND */
++	TCA_FW_ACT,	/* used by CONFIG_NET_CLS_ACT */
++	TCA_FW_MASK,	/* global mask */
+ 	__TCA_FW_MAX
+ };
+ 
+Index: linux-2.6.15-5.2/net/sched/cls_fw.c
+===================================================================
+--- linux-2.6.15-5.2.orig/net/sched/cls_fw.c
++++ linux-2.6.15-5.2/net/sched/cls_fw.c
+@@ -51,6 +51,7 @@
+ struct fw_head
+ {
+ 	struct fw_filter *ht[HTSIZE];
++	u32 mask;
+ };
+ 
+ struct fw_filter
+@@ -108,6 +109,7 @@ static int fw_classify(struct sk_buff *s
+ #endif
+ 
+ 	if (head != NULL) {
++		id &= head->mask;
+ 		for (f=head->ht[fw_hash(id)]; f; f=f->next) {
+ 			if (f->id == id) {
+ 				*res = f->res;
+@@ -210,7 +212,9 @@ static int
+ fw_change_attrs(struct tcf_proto *tp, struct fw_filter *f,
+ 	struct rtattr **tb, struct rtattr **tca, unsigned long base)
+ {
++	struct fw_head *head = (struct fw_head *)tp->root;
+ 	struct tcf_exts e;
++	u32 mask;
+ 	int err;
+ 
+ 	err = tcf_exts_validate(tp, tb, tca[TCA_RATE-1], &e, &fw_ext_map);
+@@ -231,8 +235,18 @@ fw_change_attrs(struct tcf_proto *tp, st
+ 		if (err < 0)
+ 			goto errout;
+ 	}
++	err = -EINVAL;
+ #endif /* CONFIG_NET_CLS_IND */
+ 
++	if (tb[TCA_FW_MASK-1]) {
++		if (RTA_PAYLOAD(tb[TCA_FW_MASK-1]) != sizeof(u32))
++			goto errout;
++		mask = *(u32*)RTA_DATA(tb[TCA_FW_MASK-1]);
++		if (mask != head->mask)
++			goto errout;
++	} else if (head->mask != 0xFFFFFFFF)
++		goto errout;
++
+ 	tcf_exts_change(tp, &f->exts, &e);
+ 
+ 	return 0;
+@@ -268,10 +282,19 @@ static int fw_change(struct tcf_proto *t
+ 		return -EINVAL;
+ 
+ 	if (head == NULL) {
+-		head = kmalloc(sizeof(struct fw_head), GFP_KERNEL);
++		u32 mask = 0xFFFFFFFF;
++		if (tb[TCA_FW_MASK-1]) {
++			if (RTA_PAYLOAD(tb[TCA_FW_MASK-1]) != sizeof(u32)) {
++				return -EINVAL;
++			}
++			mask = *(u32*)RTA_DATA(tb[TCA_FW_MASK-1]);
++		}
++
++		head = kzalloc(sizeof(struct fw_head), GFP_KERNEL);
+ 		if (head == NULL)
+ 			return -ENOBUFS;
+ 		memset(head, 0, sizeof(*head));
++		head->mask = mask;
+ 
+ 		tcf_tree_lock(tp);
+ 		tp->root = head;
+@@ -333,6 +356,7 @@ static void fw_walk(struct tcf_proto *tp
+ static int fw_dump(struct tcf_proto *tp, unsigned long fh,
+ 		   struct sk_buff *skb, struct tcmsg *t)
+ {
++	struct fw_head *head = (struct fw_head *)tp->root;
+ 	struct fw_filter *f = (struct fw_filter*)fh;
+ 	unsigned char	 *b = skb->tail;
+ 	struct rtattr *rta;
+@@ -354,6 +378,8 @@ static int fw_dump(struct tcf_proto *tp,
+ 	if (strlen(f->indev))
+ 		RTA_PUT(skb, TCA_FW_INDEV, IFNAMSIZ, f->indev);
+ #endif /* CONFIG_NET_CLS_IND */
++	if (head->mask != 0xFFFFFFFF)
++		RTA_PUT(skb, TCA_FW_MASK, 4, &head->mask);
+ 
+ 	if (tcf_exts_dump(skb, &f->exts, &fw_ext_map) < 0)
+ 		goto rtattr_failure;

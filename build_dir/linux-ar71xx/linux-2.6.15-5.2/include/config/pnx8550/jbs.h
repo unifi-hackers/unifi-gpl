@@ -1,0 +1,1 @@
+#undef CONFIG_PNX8550_JBS

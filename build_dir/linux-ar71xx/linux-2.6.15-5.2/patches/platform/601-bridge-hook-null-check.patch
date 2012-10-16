@@ -1,0 +1,49 @@
+--- a/net/bridge/br_fdb.c
++++ b/net/bridge/br_fdb.c
+@@ -27,7 +27,7 @@ static int br_no_entries = 0;
+ 
+ #define BR_INCR_ENTRIES() br_no_entries += 1
+ #define BR_DECR_ENTRIES() br_no_entries -= 1
+-#define BR_MAX_TABLE_ENTRIES    1024
++#define BR_MAX_TABLE_ENTRIES    4096
+ 
+ static kmem_cache_t *br_fdb_cache __read_mostly;
+ static int fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
+@@ -375,7 +375,7 @@ struct net_bridge_fdb_entry *br_fdb_upda
+ 		spin_lock_bh(&br->hash_lock);
+ 		if (!fdb_find(head, addr)) {
+ 			fdb = fdb_create(head, source, addr, 0);
+-			if (br_handle_entry_hook)
++			if (fdb && br_handle_entry_hook)
+ 				br_handle_entry_hook(source, (void *)fdb, BR_FDB_ENTRY_ADD, context);
+ 		}
+ 		/* else  we lose race and someone else inserts
+--- a/net/bridge/br_input.c
++++ b/net/bridge/br_input.c
+@@ -58,7 +58,7 @@ int br_handle_frame_finish(struct sk_buf
+ 	br = p->br;
+ 	/* insert into forwarding database after filtering to avoid spoofing */
+  	src = br_fdb_update(p->br, p, eth_hdr(skb)->h_source, (void *)skb);
+- 	if (br_handle_entry_hook)
++ 	if (src && br_handle_entry_hook)
+  		br_handle_entry_hook(p, (void *)src, BR_FDB_ENTRY_SRC, (void *)skb);
+ 
+ 	if (br->dev->flags & IFF_PROMISC) {
+@@ -72,7 +72,7 @@ int br_handle_frame_finish(struct sk_buf
+ 	}
+ 
+ 	if (dest[0] & 1) {
+-		if (br_handle_entry_hook)
++		if (src && br_handle_entry_hook)
+ 			br_handle_entry_hook(p, (void *)src, BR_FDB_ENTRY_FWD, (void *)skb);
+ 		br_flood_forward(br, skb, !passedup);
+ 		if (!passedup)
+@@ -96,7 +96,7 @@ int br_handle_frame_finish(struct sk_buf
+ 		goto out;
+ 	}
+ 
+-	if (br_handle_entry_hook)
++	if (src && br_handle_entry_hook)
+ 		br_handle_entry_hook(p, (void *)src, BR_FDB_ENTRY_FWD, (void *)skb);
+ 	br_flood_forward(br, skb, 0);
+ 

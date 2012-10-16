@@ -1,0 +1,1 @@
+#define CONFIG_SYS_HAS_CPU_MIPS32_R1 1
